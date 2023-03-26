@@ -1,0 +1,111 @@
+This role (service role) for codebuild to interact with AWS Services: CloudWatch, AWS ECR, AWS EKS and the policy mentioned above can be attached to this role:
+Rolename: codebuild-aws-proserve-java-docker-build-service-role
+
+Trust RelationShip: 
+======
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "codebuild.amazonaws.com"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+======
+
+Policy:
+=========
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "AllowBuildOutputStreamingToDefaultLogGroup",
+            "Effect": "Allow",
+            "Resource": [
+                "arn:aws:logs:*:*:log-group:*"
+            ],
+            "Action": [
+                "logs:CreateLogGroup",
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+            ]
+        },
+        {
+            "Sid": "AllowS3ObjectAccessOnCodePipelineBuckets",
+            "Action": [
+                "s3:PutObject",
+                "s3:GetObject",
+                "s3:GetObjectVersion",
+                "s3:GetBucketAcl",
+                "s3:GetBucketLocation"
+            ],
+            "Resource": "*",
+            "Effect": "Allow"
+        },
+        {
+            "Sid": "AllowPullSourceCodeFromCodeCommit",
+            "Action": "codecommit:GitPull",
+            "Resource": "*",
+            "Effect": "Allow"
+        },
+        {
+            "Sid": "AllowPushDockerImageToECR",
+            "Action": [
+                "ecr:BatchCheckLayerAvailability",
+                "ecr:CompleteLayerUpload",
+                "ecr:GetAuthorizationToken",
+                "ecr:InitiateLayerUpload",
+                "ecr:PutImage",
+                "ecr:UploadLayerPart"
+            ],
+            "Resource": "*",
+            "Effect": "Allow"
+        },
+        {
+            "Sid": "AllowEKSAccess",
+            "Effect": "Allow",
+            "Action": [
+                "eks:DescribeNodegroup",
+                "eks:DescribeUpdate",
+                "eks:DescribeCluster"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "AllowAccessCodeBuildSSMParameters",
+            "Effect": "Allow",
+            "Action": "ssm:GetParameters",
+            "Resource": "arn:aws:ssm:*:*:parameter/CodeBuild/*"
+        },
+        {
+            "Sid": "AllowRunningBuildInVpc",
+            "Effect": "Allow",
+            "Action": [
+                "ec2:CreateNetworkInterface",
+                "ec2:DescribeDhcpOptions",
+                "ec2:DescribeNetworkInterfaces",
+                "ec2:DeleteNetworkInterface",
+                "ec2:DescribeSubnets",
+                "ec2:DescribeSecurityGroups",
+                "ec2:DescribeVpcs"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "AllowBuildServiceToCreateENI",
+            "Effect": "Allow",
+            "Action": "ec2:CreateNetworkInterfacePermission",
+            "Resource": "arn:aws:ec2:*:*:network-interface/*",
+            "Condition": {
+                "StringEquals": {
+                    "ec2:AuthorizedService": "codebuild.amazonaws.com"
+                }
+            }
+        }
+    ]
+}
+=========
