@@ -1,0 +1,292 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: CFN Template to deploy CodePipeline to build Docker Image of java application and push to ECR and deploy to EKS
+
+Parameters:
+  SourceRepoName:
+    Type: String
+  CodeBranchName:
+    Type: String
+    Default: master
+  EKSClusterName:
+    Type: String
+  EKSCodeBuildAppName:
+    Type: String
+  EnvType:
+    Type: String
+  EcrDockerRepository:
+    Type: String
+
+Resources:
+
+  CodePipelineArtifactBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: CodePipelineServiceRole-${AWS::StackName}
+      Path: /service-role/
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: codepipeline-access
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+                  - codebuild:BatchGetBuildBatches
+                  - codebuild:StartBuildBatch
+                  - codecommit:GetBranch
+                  - codecommit:GetCommit
+                  - codecommit:GetRepository
+                  - codecommit:UploadArchive
+                  - codecommit:GetUploadArchiveStatus
+                  - codecommit:CancelUploadArchive
+                  - ecr:DescribeImages
+                  - iam:PassRole
+              - Resource: !Sub arn:aws:s3:::${CodePipelineArtifactBucket}/*
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketVersioning
+    DependsOn: CodePipelineArtifactBucket
+
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: CodeBuildServiceRole-${AWS::StackName}
+      Path: /service-role/
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: codebuild-access
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: '*'
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - codecommit:GitPull
+              - Resource: '*'
+                Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - eks:DescribeNodegroup
+                  - eks:DescribeUpdate
+                  - eks:DescribeCluster
+              - Resource: !Sub arn:aws:s3:::${CodePipelineArtifactBucket}/*
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketAcl
+                  - s3:GetBucketLocation
+              - Resource: !Sub arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${EcrDockerRepository}
+                Effect: Allow
+                Action:
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+  
+  EksCodeBuildkubeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: EksCodeBuildkubeRole-${AWS::StackName}
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:role/service-role/${CodeBuildServiceRole}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: codebuild-eks-access
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: '*'
+                Effect: Allow
+                Action:
+                  - eks:DescribeNodegroup
+                  - eks:DescribeUpdate
+                  - eks:DescribeCluster
+              #- Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/${EksCodeBuildkubeRole}
+              #  Effect: Allow
+              #  Action: sts:AssumeRole
+
+  CodeBuildImageProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Artifacts:
+        Type: CODEPIPELINE
+      Source:
+        Location:
+          Fn::Sub: https://git-codecommit.${AWS::Region}.amazonaws.com/v1/repos/${SourceRepoName}
+        #Type: CODECOMMIT
+        Type: CODEPIPELINE
+        BuildSpec: "buildspec.yml"
+      TimeoutInMinutes: 30
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Type: LINUX_CONTAINER
+        Image: "aws/codebuild/standard:4.0"
+        PrivilegedMode: True
+        EnvironmentVariables:
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+          - Name: IMAGE_REPO_NAME
+            Value: !Ref EcrDockerRepository
+          - Name: AWS_ACCOUNT_ID
+            Value: !Ref AWS::AccountId
+      Name: 
+        Fn::Sub: Build-${AWS::StackName}
+      ServiceRole:
+        Fn::GetAtt: [ CodeBuildServiceRole, Arn ]
+
+  CodeDeployImageProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Artifacts:
+        Type: CODEPIPELINE
+      Source:
+        Location:
+          Fn::Sub: https://git-codecommit.${AWS::Region}.amazonaws.com/v1/repos/${SourceRepoName}
+        #Type: CODECOMMIT
+        Type: CODEPIPELINE
+        BuildSpec: "buildspec_deploy.yml"
+      TimeoutInMinutes: 30
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Type: LINUX_CONTAINER
+        Image: "aws/codebuild/standard:4.0"
+        PrivilegedMode: True
+        EnvironmentVariables:
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+          - Name: IMAGE_REPO_NAME
+            Value: !Ref EcrDockerRepository
+          - Name: AWS_ACCOUNT_ID
+            Value: !Ref AWS::AccountId
+          - Name: EKS_CLUSTER_NAME
+            Value: !Ref EKSClusterName
+          - Name: EKS_CODEBUILD_ROLE_ARN
+            Value: !GetAtt EksCodeBuildkubeRole.Arn
+          - Name: EKS_CODEBUILD_APP_NAME
+            Value: !Ref EKSCodeBuildAppName
+          - Name: ENV
+            Value: !Ref EnvType
+      Name:
+        Fn::Sub: Deploy-${AWS::StackName}
+      ServiceRole:
+        Fn::GetAtt: [ CodeBuildServiceRole, Arn ]
+
+  CodePipelineCodeCommit:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name:
+        Fn::Sub: Pipeline-${AWS::StackName}
+      RoleArn:
+          Fn::GetAtt: [ CodePipelineServiceRole, Arn ]
+      ArtifactStore:
+        Type: S3
+        Location: !Sub ${CodePipelineArtifactBucket} 
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: App
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: 1
+                Provider: CodeCommit
+              Configuration:
+                BranchName: !Ref CodeBranchName
+                RepositoryName:
+                  Ref: SourceRepoName
+              OutputArtifacts:
+                - Name: SourceCodeApp
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: Build
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref CodeBuildImageProject
+              InputArtifacts:
+                - Name: SourceCodeApp
+              OutputArtifacts:
+                - Name: BuildOutput
+              RunOrder: 2
+   #DependsOn: CodeBuildImageProject
+        - Name: ApprovalToDeploy
+          Actions:
+            - Name: Approval
+              ActionTypeId:
+                Category: Approval
+                Owner: AWS
+                Version: 1
+                Provider: Manual
+              Configuration:
+                #NotificationArn:
+                  #Ref: MySNSTopic
+                CustomData: Approval or Reject the build to be deployed on EKS
+              InputArtifacts: []
+              OutputArtifacts: []
+              RunOrder: 3
+        - Name: Deploy
+          Actions:
+            - Name: Deploy
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref CodeDeployImageProject
+              InputArtifacts:
+                - Name: SourceCodeApp
+              OutputArtifacts:
+                - Name: DeployOutput
+              RunOrder: 4
+    DependsOn: [ "CodeBuildImageProject", "CodeDeployImageProject" ]
+
+Outputs:
+  CodeBuildServiceRoleARN:
+    Value: !GetAtt CodeBuildServiceRole.Arn
+  EksCodeBuildkubeRoleARN:
+    Value: !GetAtt EksCodeBuildkubeRole.Arn

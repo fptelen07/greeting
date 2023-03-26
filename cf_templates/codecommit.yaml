@@ -1,0 +1,64 @@
+Description: >
+  CloudFormation template for creating AWS CodeCommit repository and ECR repository to store cicd java eks code
+
+Parameters:
+  CodeCommitRepositoryName:
+    Type: String
+  CodeCommitRepositoryBranchName:
+    Type: String
+    Default: master
+  CodeCommitRepositoryS3Bucket:
+    Type: String
+  CodeCommitRepositoryS3BucketObjKey:
+    Type: String
+  ECRRepositoryName:
+    Type: String
+
+Resources:
+  MyRepo:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      RepositoryName: !Ref CodeCommitRepositoryName
+      RepositoryDescription: This is a repository for my project with code from CodeCommitRepositoryS3Bucket.
+      Code:
+        BranchName: !Ref CodeCommitRepositoryBranchName
+        S3: 
+          Bucket: !Ref CodeCommitRepositoryS3Bucket
+          Key: !Ref CodeCommitRepositoryS3BucketObjKey
+
+  MyECR:
+    Type: AWS::ECR::Repository
+    Properties: 
+      #ImageScanningConfiguration: { "scanOnPush": true }
+      ImageTagMutability: MUTABLE
+      LifecyclePolicy: 
+       LifecyclePolicyText: |
+         {
+            "rules": [
+                {
+                   "rulePriority": 1,
+                   "description": "Expire images older than 14 days",
+                   "selection": {
+                       "tagStatus": "any",
+                       "countType": "sinceImagePushed",
+                       "countUnit": "days",
+                       "countNumber": 14
+                    },
+                    "action": {
+                        "type": "expire"
+                    }
+                }
+           ]
+         }
+      
+      RepositoryName: !Ref ECRRepositoryName
+      #RepositoryPolicyText: Json
+      #Tags: 
+        #- Tag
+ 
+
+Outputs:
+  CodeCommitRepoUrl:
+    Value: !Sub https://console.aws.amazon.com/codesuite/codecommit/repositories/${MyRepo}/browse?region=${AWS::Region}
+  ECRUrl:
+    Value: !Sub https://console.aws.amazon.com/ecr/repositories/private/${AWS::AccountId}/${MyECR}?region=${AWS::Region}
